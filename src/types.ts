@@ -20,6 +20,7 @@ export interface ExportSettings {
   speedMultiplier: number; // 1x, 2x, etc. (skips frames or repeats them)
   loop: boolean;
   exportFormat: 'webm' | 'mp4' | 'frames-zip';
+  videoQuality: 'standard' | 'high' | 'lossless';
 }
 
 export interface PlaybackState {

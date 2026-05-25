@@ -230,6 +230,52 @@ export default function ControlPanel({
         </div>
       </div>
 
+      {/* Video Quality choosing (Only relevant if exporting as video, not zip) */}
+      {settings.exportFormat !== 'frames-zip' && (
+        <div className="space-y-3 pt-1 border-t border-zinc-850/40">
+          <div className="flex justify-between items-center bg-transparent">
+            <label className="text-sm text-zinc-300 block">Video Encoding Quality</label>
+            <span className="px-2 py-0.5 bg-blue-950/25 border border-blue-900/40 text-blue-400 font-mono text-[9px] font-bold rounded">
+              {settings.videoQuality === 'standard' && "5 Mbps Standard"}
+              {settings.videoQuality === 'high' && "45 Mbps Studio"}
+              {settings.videoQuality === 'lossless' && "95 Mbps Lossless"}
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            {(['standard', 'high', 'lossless'] as ExportSettings['videoQuality'][]).map((quality) => {
+              const isSelected = settings.videoQuality === quality;
+              return (
+                <button
+                  key={quality}
+                  onClick={() => updateSetting('videoQuality', quality)}
+                  className={`py-2 px-1 rounded-xl border text-center transition ${
+                    isSelected
+                      ? 'border-blue-600 bg-blue-950/15 text-blue-300 font-medium'
+                      : 'border-zinc-900 bg-zinc-950/30 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+                  }`}
+                >
+                  <p className="text-[11px] font-semibold">
+                    {quality === 'standard' && 'Standard'}
+                    {quality === 'high' && 'High Q'}
+                    {quality === 'lossless' && 'Pristine'}
+                  </p>
+                  <p className="text-[9px] text-zinc-500 font-mono mt-1">
+                    {quality === 'standard' && '5 Mbps'}
+                    {quality === 'high' && '45 Mbps'}
+                    {quality === 'lossless' && '95 Mbps'}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-[10px] text-zinc-500 leading-normal">
+            {settings.videoQuality === 'lossless' && "Uncompromising master bitrate. Retains stunning picture clarity with visually zero encoding degradation."}
+            {settings.videoQuality === 'high' && "Crisp studio grade. Ideal for 1080p/4K timelines with ultra-low compression artifacts."}
+            {settings.videoQuality === 'standard' && "Optimized file scale. Suitable for immediate email attachments and social uploads."}
+          </p>
+        </div>
+      )}
+
       {/* Export button */}
       <div className="pt-4 border-t border-zinc-850">
         <button

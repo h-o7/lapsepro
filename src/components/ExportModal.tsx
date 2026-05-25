@@ -21,6 +21,36 @@ export default function ExportModal({ isOpen, onClose, frames, settings }: Expor
   const [fallbackFormatUsed, setFallbackFormatUsed] = useState<boolean>(false);
   
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const isMountedRef = useRef(true);
+  const activeStreamRef = useRef<MediaStream | null>(null);
+  const activeRecorderRef = useRef<MediaRecorder | null>(null);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      
+      // Stop stream tracks and recorder if unmounting while active
+      if (activeRecorderRef.current && activeRecorderRef.current.state !== 'inactive') {
+        try {
+          activeRecorderRef.current.stop();
+        } catch (e) {
+          console.warn('Error stopping active recorder during unmount:', e);
+        }
+      }
+      if (activeStreamRef.current) {
+        try {
+          activeStreamRef.current.getTracks().forEach((track) => track.stop());
+        } catch (e) {
+          console.warn('Error stopping active video stream tracks during unmount:', e);
+        }
+      }
+      
+      if (downloadUrl) {
+        URL.revokeObjectURL(downloadUrl);
+      }
+    };
+  }, [downloadUrl]);
 
   if (!isOpen) return null;
 
@@ -63,15 +93,16 @@ export default function ExportModal({ isOpen, onClose, frames, settings }: Expor
     if (!ctx) throw new Error('Could not instantiate hidden canvas 2D rendering context.');
 
     for (let i = 0; i < filteredFrames.length; i++) {
+      if (!isMountedRef.current) return;
       setProgress(i + 1);
       const frame = filteredFrames[i];
       
       // Draw image onto canvas with scaling to make standard fit
       await drawFrameToHiddenCanvas(frame, canvas, ctx);
       
-      // Convert canvas drawing to high-quality JPEG blob
+      // Convert canvas drawing to high-quality JPEG blob (98% quality for visually lossless results)
       const blob = await new Promise<Blob | null>((resolve) => {
-        canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.90); // 90% quality
+        canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.98);
       });
 
       if (blob) {
@@ -210,12 +241,24 @@ export default function ExportModal({ isOpen, onClose, frames, settings }: Expor
       // Capture standard frame stream
       const fps = settings.frameRate;
       const stream = canvas.captureStream(fps);
+      activeStreamRef.current = stream;
       const recordedChunks: Blob[] = [];
 
-      // Avoid imposing extreme manually-forced high bitrates (e.g. 8000000) that crash lower-end systems/containers
+      // Determine appropriate bitrate based on settings.videoQuality and resolution presets
+      let bps = 35000000; // default 35 Mbps (High)
+      if (settings.videoQuality === 'standard') {
+        bps = 5000000; // 5 Mbps (Compact HD)
+      } else if (settings.videoQuality === 'high') {
+        bps = 45000000; // 45 Mbps (Full HD crisp studio)
+      } else if (settings.videoQuality === 'lossless') {
+        bps = 95000000; // 95 Mbps (Master lossless presentation rate)
+      }
+
       const mediaRecorder = new MediaRecorder(stream, {
         mimeType: selectedMimeType,
+        videoBitsPerSecond: bps,
       });
+      activeRecorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
@@ -263,6 +306,14 @@ export default function ExportModal({ isOpen, onClose, frames, settings }: Expor
       // Iterate through frames synchronously, loading and drawing each image one-by-one (memory safe!)
       const timeStep = 1000 / fps;
       for (let i = 0; i < filteredFrames.length; i++) {
+        if (!isMountedRef.current) {
+          // Abort process immediately and clear resources
+          try {
+            mediaRecorder.stop();
+          } catch (e) {}
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
         setProgress(i + 1);
         const frame = filteredFrames[i];
         
@@ -316,6 +367,11 @@ export default function ExportModal({ isOpen, onClose, frames, settings }: Expor
       // Stop and compile
       mediaRecorder.stop();
       const movieBlob = await recordingPromise;
+
+      // Stop stream tracks to free up browser canvas capturing resources
+      stream.getTracks().forEach((track) => track.stop());
+      activeStreamRef.current = null;
+      activeRecorderRef.current = null;
 
       if (!movieBlob || movieBlob.size === 0) {
         throw new Error('Recorded timelapse video compiled with 0 bytes. Try reducing resolution or changing format.');
@@ -427,8 +483,18 @@ export default function ExportModal({ isOpen, onClose, frames, settings }: Expor
                     <dt className="text-zinc-550">Speed multiplier:</dt>
                     <dd className="text-zinc-200 font-bold">{settings.speedMultiplier}x</dd>
                   </div>
+                  {settings.exportFormat !== 'frames-zip' && (
+                    <div className="flex justify-between border-b border-zinc-900/60 pb-1.5 col-span-2 flex-row">
+                      <dt className="text-zinc-500">Encoding Bitrate:</dt>
+                      <dd className="text-emerald-400 font-bold">
+                        {settings.videoQuality === 'standard' && '5 Mbps (Standard)'}
+                        {settings.videoQuality === 'high' && '45 Mbps ( crisp high )'}
+                        {settings.videoQuality === 'lossless' && '95 Mbps (Lossless Master)'}
+                      </dd>
+                    </div>
+                  )}
                   <div className="flex justify-between pt-1.5 col-span-2 flex-row">
-                    <dt className="text-zinc-500 font-sans italic">Total frames to write:</dt>
+                    <dt className="text-zinc-550 font-sans italic">Total frames to write:</dt>
                     <dd className="text-blue-400 font-bold">{filteredFrames.length} items</dd>
                   </div>
                 </dl>

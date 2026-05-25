@@ -17,6 +17,7 @@ const INITIAL_SETTINGS: ExportSettings = {
   speedMultiplier: 1,
   loop: true,
   exportFormat: 'webm',
+  videoQuality: 'high',
 };
 
 // Capping resolution helper to prevent browser video encoding crashes due to extreme dimensions
