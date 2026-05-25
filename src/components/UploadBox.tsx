@@ -40,6 +40,7 @@ export default function UploadBox({
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       onFilesSelected(e.target.files);
+      e.target.value = ''; // Clear value pointer to allow re-selecting same files after workspace resets
     }
   };
 

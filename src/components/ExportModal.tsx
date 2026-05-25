@@ -17,6 +17,8 @@ export default function ExportModal({ isOpen, onClose, frames, settings }: Expor
   const [total, setTotal] = useState(0);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [actualExt, setActualExt] = useState<string>('mp4');
+  const [fallbackFormatUsed, setFallbackFormatUsed] = useState<boolean>(false);
   
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -51,9 +53,11 @@ export default function ExportModal({ isOpen, onClose, frames, settings }: Expor
   // 1. Compile Sequenced JPG files inside a ZIP
   const compileZip = async () => {
     const zip = new JSZip();
-    const canvas = document.createElement('canvas');
-    canvas.width = settings.resolutionWidth;
-    canvas.height = settings.resolutionHeight;
+    
+    // Wait slightly to let React mount the on-screen canvas ref
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const canvas = canvasRef.current;
+    if (!canvas) throw new Error('Could not find active compilation preview canvas ref.');
     const ctx = canvas.getContext('2d');
     
     if (!ctx) throw new Error('Could not instantiate hidden canvas 2D rendering context.');
@@ -91,30 +95,83 @@ export default function ExportModal({ isOpen, onClose, frames, settings }: Expor
     setExporting(false);
   };
 
-  // 2. Compile Real WebM video recording via Canvas + MediaRecorder
+  // Preload helper to cache all frames inside memory before recording starts
+  const preloadFrameImages = async (framesToPreload: TimelapseFrame[]): Promise<HTMLImageElement[]> => {
+    const promises = framesToPreload.map((frame) => {
+      return new Promise<HTMLImageElement>((resolve) => {
+        const img = new Image();
+        img.src = frame.previewUrl;
+        img.onload = () => resolve(img);
+        img.onerror = () => resolve(img); // Resolve anyway as fallback to not crash compilation
+      });
+    });
+    return Promise.all(promises);
+  };
+
+  // Helper to draw a preloaded image onto canvas synchronously
+  const drawPreloadedImageToCanvas = (img: HTMLImageElement, frame: TimelapseFrame, canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D) => {
+    // Fill deep off-black background matching players
+    ctx.fillStyle = '#0a0a0c';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    if (!img || !img.complete || img.naturalWidth === 0) {
+      // Draw visible error placeholder
+      ctx.fillStyle = '#7f1d1d';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#fca5a5';
+      ctx.font = '16px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(`Error rendering: ${frame.name}`, canvas.width / 2, canvas.height / 2);
+      return;
+    }
+
+    const imgW = img.naturalWidth || frame.width || 1;
+    const imgH = img.naturalHeight || frame.height || 1;
+    const targetRatio = imgW / imgH;
+
+    let renderW = canvas.width;
+    let renderH = canvas.width / targetRatio;
+
+    if (renderH > canvas.height) {
+      renderH = canvas.height;
+      renderW = canvas.height * targetRatio;
+    }
+
+    const xOffset = (canvas.width - renderW) / 2;
+    const yOffset = (canvas.height - renderH) / 2;
+
+    ctx.drawImage(img, xOffset, yOffset, renderW, renderH);
+  };
+
+  // 2. Compile Real WebM/MP4 video recording via Canvas + MediaRecorder
   const compileVideo = async () => {
-    const canvas = document.createElement('canvas');
-    canvas.width = settings.resolutionWidth;
-    canvas.height = settings.resolutionHeight;
+    // Wait slightly to let React mount the on-screen canvas ref
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const canvas = canvasRef.current;
+    if (!canvas) throw new Error('Could not find active compilation preview canvas ref.');
     const ctx = canvas.getContext('2d');
     
     if (!ctx) throw new Error('Could not instantiate video capture canvas rendering context.');
 
-    // Append canvas to DOM off-screen to prevent Chromium/Electron from optimizing away the painting pipeline for detached canvases
-    canvas.style.position = 'fixed';
-    canvas.style.top = '-9999px';
-    canvas.style.left = '-9999px';
-    canvas.style.visibility = 'hidden';
-    canvas.style.pointerEvents = 'none';
-    document.body.appendChild(canvas);
-
     try {
-      // Find supported type (excluding audio codec 'opus' to prevent encoder stalls on canvas-only silent streams)
-      const typesSupported = [
-        'video/webm;codecs=vp9',
-        'video/webm;codecs=vp8',
-        'video/webm',
-      ];
+      // Find supported container (MP4 or WebM) based on user settings
+      let typesSupported: string[] = [];
+      const userWantsMP4 = settings.exportFormat === 'mp4';
+
+      if (userWantsMP4) {
+        typesSupported = [
+          'video/mp4;codecs=h264',
+          'video/mp4;codecs=avc1',
+          'video/mp4',
+        ];
+      } else {
+        typesSupported = [
+          'video/webm;codecs=vp9',
+          'video/webm;codecs=vp8',
+          'video/webm',
+        ];
+      }
+
       let selectedMimeType = '';
       for (const t of typesSupported) {
         if (MediaRecorder.isTypeSupported(t)) {
@@ -123,80 +180,162 @@ export default function ExportModal({ isOpen, onClose, frames, settings }: Expor
         }
       }
 
+      let fellBack = false;
+      // Safe fallback if target MIME type is completely unsupported by browser
       if (!selectedMimeType) {
-        throw new Error('No compatible browser movie encoder formats (WebM/VP8/VP9) were found.');
+        if (userWantsMP4) {
+          fellBack = true;
+        }
+        const fallbacks = [
+          'video/webm;codecs=vp9',
+          'video/webm;codecs=vp8',
+          'video/webm',
+        ];
+        for (const f of fallbacks) {
+          if (MediaRecorder.isTypeSupported(f)) {
+            selectedMimeType = f;
+            break;
+          }
+        }
       }
+
+      if (!selectedMimeType) {
+        throw new Error('No compatible browser movie encoding formats (MP4/WebM) are supported by your browser.');
+      }
+
+      setFallbackFormatUsed(fellBack);
+      const isActuallyMP4 = selectedMimeType.toLowerCase().includes('mp4');
+      setActualExt(isActuallyMP4 ? 'mp4' : 'webm');
 
       // Capture standard frame stream
       const fps = settings.frameRate;
       const stream = canvas.captureStream(fps);
       const recordedChunks: Blob[] = [];
 
+      // Avoid imposing extreme manually-forced high bitrates (e.g. 8000000) that crash lower-end systems/containers
       const mediaRecorder = new MediaRecorder(stream, {
         mimeType: selectedMimeType,
-        videoBitsPerSecond: 8000000, // 8 Mbps high-quality WebM bitrate
       });
 
       mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
+        if (event.data && event.data.size > 0) {
           recordedChunks.push(event.data);
         }
       };
 
+      const containerMimeType = selectedMimeType.split(';')[0];
+
       // Returns a promise that resolves when the recorder finishes
       const recordingPromise = new Promise<Blob>((resolve) => {
         mediaRecorder.onstop = () => {
-          const videoBlob = new Blob(recordedChunks, { type: 'video/webm' });
+          const videoBlob = new Blob(recordedChunks, { type: containerMimeType });
           resolve(videoBlob);
         };
       });
 
       // Warm up and start recording
       mediaRecorder.start();
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      await new Promise((resolve) => setTimeout(resolve, 300));
 
       // Draw first frame immediately to establish the stream keyframe
       if (filteredFrames.length > 0) {
-        await drawFrameToHiddenCanvas(filteredFrames[0], canvas, ctx);
+        const firstFrame = filteredFrames[0];
+        const firstImg = await new Promise<HTMLImageElement>((resolve) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = () => resolve(img);
+          img.src = firstFrame.previewUrl;
+        });
+
+        drawPreloadedImageToCanvas(firstImg, firstFrame, canvas, ctx);
+        try {
+          ctx.getImageData(0, 0, 1, 1);
+        } catch (e) {
+          console.warn('GPU readback flush skipped', e);
+        }
+        const track = stream.getVideoTracks()[0];
+        if (track && 'requestFrame' in track) {
+          (track as any).requestFrame();
+        }
+        await new Promise((resolve) => setTimeout(resolve, 150));
       }
 
-      // Iterate through frames synchronously, drawing at frame step intervals
+      // Iterate through frames synchronously, loading and drawing each image one-by-one (memory safe!)
+      const timeStep = 1000 / fps;
       for (let i = 0; i < filteredFrames.length; i++) {
         setProgress(i + 1);
         const frame = filteredFrames[i];
         
-        await drawFrameToHiddenCanvas(frame, canvas, ctx);
+        const startTime = Date.now();
+
+        // Load the image sequentially to maintain a tiny flat memory profile
+        const img = await new Promise<HTMLImageElement>((resolve) => {
+          const tempImg = new Image();
+          tempImg.onload = () => resolve(tempImg);
+          tempImg.onerror = () => resolve(tempImg); // continues gracefully
+          tempImg.src = frame.previewUrl;
+        });
         
-        // Wait dynamic timeout matching precise FPS duration to allow MediaRecorder ingestion of frame state
-        await new Promise((resolve) => setTimeout(resolve, 1000 / fps));
+        drawPreloadedImageToCanvas(img, frame, canvas, ctx);
+
+        // Force synchronous GPU rasterization flush so the frame is fully painted into the canvas stream buffer
+        try {
+          ctx.getImageData(0, 0, 1, 1);
+        } catch (e) {
+          console.warn('GPU readback flush skipped', e);
+        }
+
+        // Trigger manual frame capture on the track if supported
+        const track = stream.getVideoTracks()[0];
+        if (track && 'requestFrame' in track) {
+          (track as any).requestFrame();
+        }
+        
+        const elapsed = Date.now() - startTime;
+        const remainingDelay = Math.max(0, timeStep - elapsed);
+
+        // Wait precise interval matching target FPS, while forcing browser paint-loop cycle to flush
+        await new Promise((resolve) => {
+          let resolved = false;
+          const done = () => {
+            if (!resolved) {
+              resolved = true;
+              resolve(null);
+            }
+          };
+          requestAnimationFrame(() => {
+            setTimeout(done, Math.max(0, remainingDelay - 15)); // offset some execution time
+          });
+          setTimeout(done, remainingDelay); // fallback if backgrounded
+        });
       }
 
-      // Hold last frame slightly to satisfy final keyframes
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      // Safe pause so the browser has plenty of time to fully compress and flush final frames
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
       // Stop and compile
       mediaRecorder.stop();
       const movieBlob = await recordingPromise;
 
+      if (!movieBlob || movieBlob.size === 0) {
+        throw new Error('Recorded timelapse video compiled with 0 bytes. Try reducing resolution or changing format.');
+      }
+
       const url = URL.createObjectURL(movieBlob);
       setDownloadUrl(url);
       setComplete(true);
       setExporting(false);
-    } finally {
-      // Clean up the DOM-appended canvas safely
-      if (canvas.parentNode) {
-        canvas.parentNode.removeChild(canvas);
-      }
+    } catch (err) {
+      // Pass down to outer handler
+      throw err;
     }
   };
 
-  // Shared Helper to render a frame onto a destination canvas, scaling or cropping correctly
+  // Shared Helper for ZIP sequential rendering
   const drawFrameToHiddenCanvas = (frame: TimelapseFrame, canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D): Promise<void> => {
     return new Promise((resolve) => {
       const img = new Image();
-      img.src = frame.previewUrl;
       img.onload = () => {
-        // Draw deep graphite background in case of aspect differences so it looks perfect
         ctx.fillStyle = '#0a0a0c';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -219,7 +358,6 @@ export default function ExportModal({ isOpen, onClose, frames, settings }: Expor
         resolve();
       };
       img.onerror = () => {
-        // Just fill simple color if image loading fails to avoid blocking compile
         ctx.fillStyle = '#7f1d1d';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.fillStyle = '#fca5a5';
@@ -228,6 +366,7 @@ export default function ExportModal({ isOpen, onClose, frames, settings }: Expor
         ctx.fillText(`Error drawing ${frame.name}`, canvas.width / 2, canvas.height / 2);
         resolve();
       };
+      img.src = frame.previewUrl;
     });
   };
 
@@ -237,11 +376,11 @@ export default function ExportModal({ isOpen, onClose, frames, settings }: Expor
     a.href = downloadUrl;
     
     // Choose name based on format
-    const nameSlug = 'timelapse_compulation';
+    const nameSlug = 'timelapse_compilation';
     if (settings.exportFormat === 'frames-zip') {
       a.download = `${nameSlug}_frames.zip`;
     } else {
-      a.download = `${nameSlug}.webm`;
+      a.download = `${nameSlug}.${actualExt}`;
     }
     
     document.body.appendChild(a);
@@ -302,7 +441,7 @@ export default function ExportModal({ isOpen, onClose, frames, settings }: Expor
                   Your compilation will be scaled to exactly <span className="text-blue-300 font-mono font-bold">{settings.resolutionWidth}x{settings.resolutionHeight} px</span>.
                   {settings.exportFormat === 'frames-zip'
                     ? ' This will compile each static photo, save it to high-quality JPG, and pack them sequentially in a structure matching professional editing tools.'
-                    : ' This will compile the frames in canvas and render an HTML5 compatible high-bitrate WebM movie.'}
+                    : ` This will compile the frames in canvas and render an HTML5 compatible high-bitrate ${settings.exportFormat.toUpperCase()} video.`}
                 </p>
               </div>
 
@@ -325,6 +464,20 @@ export default function ExportModal({ isOpen, onClose, frames, settings }: Expor
                 ) : (
                   <Video className="absolute w-6 h-6 text-blue-400 animate-pulse" />
                 )}
+              </div>
+
+              {/* Dynamic Live Encoding Canvas (Forces GPU rendering context pipeline and stays active in viewport) */}
+              <div className="relative mx-auto max-w-[320px] rounded-xl overflow-hidden border border-zinc-800 bg-zinc-950 p-1.5 shadow-md">
+                <canvas
+                  ref={canvasRef}
+                  width={settings.resolutionWidth}
+                  height={settings.resolutionHeight}
+                  className="w-full h-auto aspect-video object-contain bg-zinc-900 rounded-lg"
+                />
+                <div className="absolute top-4.5 right-4.5 px-2 py-0.5 bg-rose-600 text-white font-mono text-[9px] uppercase font-bold rounded flex items-center gap-1.5 shadow-lg">
+                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                  {settings.exportFormat === 'frames-zip' ? 'EXTRACTING' : 'RECORDING'}
+                </div>
               </div>
 
               <div className="space-y-1.5">
@@ -357,11 +510,21 @@ export default function ExportModal({ isOpen, onClose, frames, settings }: Expor
 
               <div className="space-y-1">
                 <p className="text-md font-bold text-emerald-400 uppercase tracking-wider font-mono">Compilation Successful!</p>
-                <p className="text-xs text-zinc-400 leading-relaxed max-w-sm mx-auto">
-                  {settings.exportFormat === 'frames-zip'
-                    ? 'Your zipped archive of perfectly sized sequential JPG frames has been successfully built.'
-                    : 'Your high-bitrate WebM timelapse video compilation has been encoded successfully.'}
-                </p>
+                <div className="text-xs text-zinc-400 leading-relaxed max-w-sm mx-auto space-y-3">
+                  <p>
+                    {settings.exportFormat === 'frames-zip'
+                      ? 'Your zipped archive of perfectly sized sequential JPG frames has been successfully built.'
+                      : `Your video timelapse compilation has been encoded successfully as ${actualExt.toUpperCase()}.`}
+                  </p>
+                  
+                  {fallbackFormatUsed && (
+                    <div className="mt-3 p-3 bg-amber-950/25 border border-amber-900/50 rounded-xl text-left text-xs text-amber-300 leading-relaxed font-mono">
+                      <span className="font-bold uppercase tracking-wider block mb-1 text-amber-400">⚠️ Format Fallback Applied</span>
+                      Your browser or OS platform does not natively support the <span className="underline font-bold text-amber-200">MP4 (H.264)</span> hardware video recording format. 
+                      To ensure your file compile succeeded and didn't result in an empty file, we fell back and created a high-quality, fully compatible <span className="font-bold text-amber-200">WEBM</span> movie file instead.
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="pt-2 flex flex-col gap-2.5 max-w-xs mx-auto font-mono">

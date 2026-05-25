@@ -19,11 +19,50 @@ const INITIAL_SETTINGS: ExportSettings = {
   exportFormat: 'webm',
 };
 
+// Capping resolution helper to prevent browser video encoding crashes due to extreme dimensions
+function capResolutionTo4k(width: number, height: number): { width: number; height: number } {
+  const MAX_W = 3840;
+  const MAX_H = 2160;
+  
+  let targetW = width;
+  let targetH = height;
+  
+  if (targetW > MAX_W) {
+    const scale = MAX_W / targetW;
+    targetW = MAX_W;
+    targetH = Math.round(targetH * scale);
+  }
+  
+  if (targetH > MAX_H) {
+    const scale = MAX_H / targetH;
+    targetH = MAX_H;
+    targetW = Math.round(targetW * scale);
+  }
+  
+  // Audio-video codecs like H.264 / AV1 strictly require even dimensions
+  if (targetW % 2 !== 0) targetW--;
+  if (targetH % 2 !== 0) targetH--;
+  
+  return { width: Math.max(100, targetW), height: Math.max(100, targetH) };
+}
+
 export default function App() {
   const [frames, setFrames] = useState<TimelapseFrame[]>([]);
   const [selectedFrameIndex, setSelectedFrameIndex] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [settings, setSettings] = useState<ExportSettings>(INITIAL_SETTINGS);
+
+  const handleSettingsChange = (newSettings: ExportSettings) => {
+    if (newSettings.aspectRatio === 'original' && frames.length > 0) {
+      const firstFrame = frames[0];
+      if (firstFrame && firstFrame.status === 'ready' && firstFrame.width && firstFrame.height) {
+        const capped = capResolutionTo4k(firstFrame.width, firstFrame.height);
+        newSettings.resolutionWidth = capped.width;
+        newSettings.resolutionHeight = capped.height;
+      }
+    }
+    setSettings(newSettings);
+  };
 
   // File loading states
   const [isProcessing, setIsProcessing] = useState(false);
@@ -119,6 +158,19 @@ export default function App() {
       if (selectedFrameIndex === null && newSequence.length > 0) {
         setSelectedFrameIndex(0);
       }
+
+      // Auto-update resolution to match first frame if using 'original' (Match Source)
+      if (prev.length === 0 && newSequence.length > 0) {
+        const firstFrame = newSequence[0];
+        if (firstFrame && firstFrame.status === 'ready' && firstFrame.width && firstFrame.height) {
+          const capped = capResolutionTo4k(firstFrame.width, firstFrame.height);
+          setSettings((s) => ({
+            ...s,
+            resolutionWidth: capped.width,
+            resolutionHeight: capped.height,
+          }));
+        }
+      }
       return newSequence;
     });
     
@@ -146,12 +198,18 @@ export default function App() {
   };
 
   const handleClearAll = () => {
+    // Safely revoke all blob URLs first to prevent memory leaks
     frames.forEach((f) => {
       if (f.previewUrl) URL.revokeObjectURL(f.previewUrl);
     });
     setFrames([]);
     setSelectedFrameIndex(null);
     setIsPlaying(false);
+    setSettings(INITIAL_SETTINGS);
+    setIsExportOpen(false);
+    setIsProcessing(false);
+    setProcessingProgress(0);
+    setProcessingTotal(0);
   };
 
   // 5. Sequence Sorting mechanisms
@@ -357,7 +415,7 @@ export default function App() {
           ) : (
             <ControlPanel
               settings={settings}
-              onChangeSettings={setSettings}
+              onChangeSettings={handleSettingsChange}
               onStartExport={() => setIsExportOpen(true)}
               framesCount={frames.length}
             />
@@ -407,9 +465,23 @@ export default function App() {
                   Have more photos or other raw frames to add?
                 </span>
                 
+                <input
+                  id="append-images-file-input"
+                  type="file"
+                  multiple
+                  accept=".jpg,.jpeg,.png,.gif,.webp,.avif,.nef,.dng,.cr2,.arw"
+                  onChange={(e) => {
+                    if (e.target.files && e.target.files.length > 0) {
+                      handleFilesSelected(e.target.files);
+                      e.target.value = ''; // clears selection pointer so reselecting same files triggers change event again
+                    }
+                  }}
+                  className="hidden"
+                />
+
                 <button
                   onClick={() => {
-                    const input = document.getElementById('file-element-input');
+                    const input = document.getElementById('append-images-file-input');
                     if (input) input.click();
                   }}
                   className="px-3.5 py-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-850 text-zinc-200 transition-all border border-zinc-800 hover:border-zinc-700 hover:text-white font-mono text-xs font-bold shadow-sm"
@@ -442,12 +514,14 @@ export default function App() {
       </main>
 
       {/* Export manager compilation modal dialogue */}
-      <ExportModal
-        isOpen={isExportOpen}
-        onClose={() => setIsExportOpen(false)}
-        frames={frames}
-        settings={settings}
-      />
+      {isExportOpen && (
+        <ExportModal
+          isOpen={isExportOpen}
+          onClose={() => setIsExportOpen(false)}
+          frames={frames}
+          settings={settings}
+        />
+      )}
 
     </div>
   );

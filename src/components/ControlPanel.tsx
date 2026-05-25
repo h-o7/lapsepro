@@ -182,7 +182,22 @@ export default function ControlPanel({
       {/* Export Format choosing */}
       <div className="space-y-3 pt-1 border-t border-zinc-850/40">
         <label className="text-sm text-zinc-300 block">Export Format</label>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <button
+            onClick={() => updateSetting('exportFormat', 'mp4')}
+            className={`flex items-center gap-2.5 p-2.5 rounded-xl border transition text-left ${
+              settings.exportFormat === 'mp4'
+                ? 'border-blue-600 bg-blue-950/15 text-blue-300'
+                : 'border-zinc-800 bg-zinc-950/20 text-zinc-400 hover:border-zinc-700'
+            }`}
+          >
+            <Video className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+            <div>
+              <p className="text-xs font-semibold animate-pulse">MP4 Video</p>
+              <p className="text-[9px] text-zinc-500">Universal H.264</p>
+            </div>
+          </button>
+
           <button
             onClick={() => updateSetting('exportFormat', 'webm')}
             className={`flex items-center gap-2.5 p-2.5 rounded-xl border transition text-left ${
@@ -194,7 +209,7 @@ export default function ControlPanel({
             <Video className="w-4 h-4 text-blue-400 flex-shrink-0" />
             <div>
               <p className="text-xs font-semibold">WebM Movie</p>
-              <p className="text-[9px] text-zinc-500">Fast HTML5 video</p>
+              <p className="text-[9px] text-zinc-500">Fast HTML5 web</p>
             </div>
           </button>
 
@@ -209,7 +224,7 @@ export default function ControlPanel({
             <FileArchive className="w-4 h-4 text-amber-500 flex-shrink-0" />
             <div>
               <p className="text-xs font-semibold">Sequenced ZIP</p>
-              <p className="text-[9px] text-zinc-500">Perfect for NLEs</p>
+              <p className="text-[9px] text-zinc-500">For video editors</p>
             </div>
           </button>
         </div>

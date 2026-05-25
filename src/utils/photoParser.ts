@@ -368,13 +368,13 @@ export async function parseUploadFile(file: File): Promise<Partial<TimelapseFram
   // Determine pixel dimensions by loading the image in the browser background
   const dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) => {
     const img = new Image();
-    img.src = previewUrl;
     img.onload = () => {
       resolve({ width: img.naturalWidth, height: img.naturalHeight });
     };
     img.onerror = () => {
       reject(new Error('ImageDecodingFailed: Could not render image preview in browser.'));
     };
+    img.src = previewUrl;
   });
   
   return {

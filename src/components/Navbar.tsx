@@ -16,7 +16,7 @@ export default function Navbar({ totalFrames, onShowDemo, onClearAll }: NavbarPr
         </div>
         <div>
           <h1 className="text-lg font-bold tracking-tight uppercase text-zinc-100 font-sans">
-            LapsePro <span className="text-zinc-500 font-normal">v1.1</span>
+            LapsePro <span className="text-zinc-500 font-normal">v1.3</span>
           </h1>
           <p className="text-[10px] text-zinc-400 font-mono tracking-wide uppercase">High-Speed Raw Sequence Compiler</p>
         </div>
