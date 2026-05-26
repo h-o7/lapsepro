@@ -1,4 +1,4 @@
-# 🎬 LapsePro Studio (v1.3.0)
+# 🎬 LapsePro Studio
 
 LapsePro Studio is a powerful, privacy-first, offline-ready desktop and web-based timelapse creator and video compiler. Built with **React 19**, **Vite**, **TypeScript**, and **Tailwind CSS**, and wrapped in an **Electron** desktop container, it allows you to bundle high-resolution photo folders directly into beautifully-timed, visually stunning cinematic motion sequences entirely within your local browser sandbox or desktop environment.
 
